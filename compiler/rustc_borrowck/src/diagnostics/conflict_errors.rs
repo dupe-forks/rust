@@ -8,7 +8,6 @@ use std::ops::ControlFlow;
 
 use either::Either;
 use hir::{ClosureKind, Path};
-use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::FxIndexSet;
 use rustc_errors::codes::*;
 use rustc_errors::{Applicability, Diag, MultiSpan, struct_span_code_err};
@@ -18,12 +17,11 @@ use rustc_hir::intravisit::{Visitor, walk_block, walk_expr};
 use rustc_hir::{CoroutineDesugaring, CoroutineKind, CoroutineSource, LangItem, PatField};
 use rustc_middle::bug;
 use rustc_middle::hir::nested_filter::OnlyBodies;
-use rustc_middle::mir::tcx::PlaceTy;
 use rustc_middle::mir::{
     self, AggregateKind, BindingForm, BorrowKind, ClearCrossCrate, ConstraintCategory,
     FakeBorrowKind, FakeReadCause, LocalDecl, LocalInfo, LocalKind, Location, MutBorrowKind,
-    Operand, Place, PlaceRef, ProjectionElem, Rvalue, Statement, StatementKind, Terminator,
-    TerminatorKind, VarBindingForm, VarDebugInfoContents,
+    Operand, Place, PlaceRef, PlaceTy, ProjectionElem, Rvalue, Statement, StatementKind,
+    Terminator, TerminatorKind, VarBindingForm, VarDebugInfoContents,
 };
 use rustc_middle::ty::print::PrintTraitRefExt as _;
 use rustc_middle::ty::{
@@ -387,7 +385,6 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
             }
         }
         let tcx = self.infcx.tcx;
-        let hir = self.infcx.tcx.hir();
         if let Some(body) = tcx.hir_maybe_body_owned_by(self.mir_def_id()) {
             let expr = body.value;
             let place = &self.move_data.move_paths[mpi].place;
@@ -403,7 +400,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
             if let Some(span) = span
                 && let Some(expr) = finder.expr
             {
-                for (_, expr) in hir.parent_iter(expr.hir_id) {
+                for (_, expr) in tcx.hir_parent_iter(expr.hir_id) {
                     if let hir::Node::Expr(expr) = expr {
                         if expr.span.contains(span) {
                             // If the let binding occurs within the same loop, then that
@@ -970,7 +967,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         let mut parent = None;
         // The top-most loop where the moved expression could be moved to a new binding.
         let mut outer_most_loop: Option<&hir::Expr<'_>> = None;
-        for (_, node) in tcx.hir().parent_iter(expr.hir_id) {
+        for (_, node) in tcx.hir_parent_iter(expr.hir_id) {
             let e = match node {
                 hir::Node::Expr(e) => e,
                 hir::Node::LetStmt(hir::LetStmt { els: Some(els), .. }) => {
@@ -1022,8 +1019,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
             }
         }
         let loop_count: usize = tcx
-            .hir()
-            .parent_iter(expr.hir_id)
+            .hir_parent_iter(expr.hir_id)
             .map(|(_, node)| match node {
                 hir::Node::Expr(hir::Expr { kind: hir::ExprKind::Loop(..), .. }) => 1,
                 _ => 0,
@@ -1049,8 +1045,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 .collect::<Vec<Span>>();
             // All of the spans for the loops above the expression with the move error.
             let loop_spans: Vec<_> = tcx
-                .hir()
-                .parent_iter(expr.hir_id)
+                .hir_parent_iter(expr.hir_id)
                 .filter_map(|(_, node)| match node {
                     hir::Node::Expr(hir::Expr { span, kind: hir::ExprKind::Loop(..), .. }) => {
                         Some(*span)
@@ -1335,7 +1330,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
     }
 
     fn in_move_closure(&self, expr: &hir::Expr<'_>) -> bool {
-        for (_, node) in self.infcx.tcx.hir().parent_iter(expr.hir_id) {
+        for (_, node) in self.infcx.tcx.hir_parent_iter(expr.hir_id) {
             if let hir::Node::Expr(hir::Expr { kind: hir::ExprKind::Closure(closure), .. }) = node
                 && let hir::CaptureBy::Value { .. } = closure.capture_clause
             {
@@ -2119,7 +2114,6 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         issued_span: Span,
     ) {
         let tcx = self.infcx.tcx;
-        let hir = tcx.hir();
 
         let has_split_at_mut = |ty: Ty<'tcx>| {
             let ty = ty.peel_refs();
@@ -2172,7 +2166,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 return;
             };
 
-            let Some(object) = hir.parent_id_iter(index1.hir_id).find_map(|id| {
+            let Some(object) = tcx.hir_parent_id_iter(index1.hir_id).find_map(|id| {
                 if let hir::Node::Expr(expr) = tcx.hir_node(id)
                     && let hir::ExprKind::Index(obj, ..) = expr.kind
                 {
@@ -2190,7 +2184,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 return;
             };
 
-            let Some(swap_call) = hir.parent_id_iter(object.hir_id).find_map(|id| {
+            let Some(swap_call) = tcx.hir_parent_id_iter(object.hir_id).find_map(|id| {
                 if let hir::Node::Expr(call) = tcx.hir_node(id)
                     && let hir::ExprKind::Call(callee, ..) = call.kind
                     && let hir::ExprKind::Path(qpath) = callee.kind
@@ -2622,7 +2616,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 if let hir::Pat { kind: hir::PatKind::Binding(_, hir_id, _ident, _), .. } =
                     local.pat
                     && let Some(init) = local.init
-                    && let hir::Expr {
+                    && let &hir::Expr {
                         kind:
                             hir::ExprKind::Closure(&hir::Closure {
                                 kind: hir::ClosureKind::Closure,
@@ -3535,10 +3529,10 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         location: Location,
         mpi: MovePathIndex,
     ) -> (Vec<MoveSite>, Vec<Location>) {
-        fn predecessor_locations<'a, 'tcx>(
-            body: &'a mir::Body<'tcx>,
+        fn predecessor_locations<'tcx>(
+            body: &mir::Body<'tcx>,
             location: Location,
-        ) -> impl Iterator<Item = Location> + Captures<'tcx> + 'a {
+        ) -> impl Iterator<Item = Location> {
             if location.statement_index == 0 {
                 let predecessors = body.basic_blocks.predecessors()[location.block].to_vec();
                 Either::Left(predecessors.into_iter().map(move |bb| body.terminator_loc(bb)))
